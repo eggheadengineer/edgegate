@@ -116,7 +116,7 @@ def run_command(cfg, backend, out_dir, notes=None):
     """The command backend: run the process for benchmark.duration_s (or until it exits), sampling meanwhile."""
     bench = cfg["benchmark"]
     duration = bench.get("duration_s") or 0
-    out_dir = pathlib.Path(out_dir)
+    out_dir = pathlib.Path(out_dir).resolve()      # absolute: the command runs with its own cwd (the config dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     sub = lambda x: x.replace("{out}", str(out_dir))
     cmd = [backend.path, *[sub(a) for a in backend.args]]

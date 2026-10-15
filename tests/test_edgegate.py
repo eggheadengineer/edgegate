@@ -361,6 +361,16 @@ class Command(unittest.TestCase):
         self.assertIn("detections 4", p.stdout)
         self.assertTrue((d / "r.d" / "events.log").exists())
 
+    def test_out_placeholder_is_absolute_even_with_relative_out_dir(self):
+        d = self.project(sleep_s=0, lines=3, duration_s=10)
+        cwd = os.getcwd(); os.chdir(d.parent)
+        try:
+            r = measure.run(config.load(d / "edgegate.yaml"), out_dir=pathlib.Path(d.name) / "rel-out")
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(r["metrics"]["detections"]["count"], 3)      # counted from the same dir the command wrote to
+        self.assertTrue(pathlib.Path(r["command"]["argv"][-1]).is_absolute())
+
     def test_relative_args_resolve_against_config_dir(self):
         d = self.project(sleep_s=0, lines=2, duration_s=10)
         text = (d / "edgegate.yaml").read_text().replace(f'"{d / "work.py"}"', '"work.py"')
