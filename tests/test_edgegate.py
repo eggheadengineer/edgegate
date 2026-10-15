@@ -267,3 +267,96 @@ class Cli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Command(unittest.TestCase):
+    """The command backend: any process as the DUT, metrics counted from its output files."""
+
+    def project(self, sleep_s, lines, duration_s, thresholds=""):
+        d = pathlib.Path(tempfile.mkdtemp(prefix="edgegate-cmd-"))
+        (d / "work.py").write_text(textwrap.dedent(f"""
+            import sys, time, pathlib
+            out = pathlib.Path(sys.argv[1]); out.mkdir(parents=True, exist_ok=True)
+            with open(out / "events.log", "w") as f:
+                for i in range({lines}):
+                    f.write(f"event {{i}} detected\\n")
+            print("ready", flush=True)
+            time.sleep({sleep_s})
+        """))
+        thr = "\n".join("  " + ln for ln in textwrap.dedent(thresholds).strip().splitlines()) if thresholds.strip() else "  {}"
+        (d / "edgegate.yaml").write_text(textwrap.dedent(f"""
+            version: 1
+            model:
+              backend: command
+              path: {sys.executable}
+              args: ["{d / 'work.py'}", "{{out}}"]
+              env: {{ EDGEGATE_TEST: "1" }}
+            benchmark: {{ duration_s: {duration_s} }}
+            power: {{ sampler: none }}
+            device: {{ name: host }}
+            metrics:
+              - {{ name: detections, file: "{{out}}/events.log", pattern: "detected" }}
+              - {{ name: missing, file: "{{out}}/nope.log", pattern: "x" }}
+            thresholds:
+            __THR__
+        """).replace("__THR__", thr.replace("\n", "\n")))
+        return d
+
+    def test_counts_metrics_and_exit_code(self):
+        d = self.project(sleep_s=0, lines=7, duration_s=30)
+        r = measure.run(config.load(d / "edgegate.yaml"), out_dir=d / "out")
+        self.assertEqual(r["command"]["exit_code"], 0)
+        self.assertFalse(r["command"]["timed_out"])
+        self.assertEqual(r["metrics"]["detections"]["count"], 7)
+        self.assertIsNone(r["metrics"]["missing"]["count"])
+        self.assertIsNone(r["latency_ms"]["p99"])
+        self.assertGreater(r["memory"]["peak_rss_mb"], 0)
+        self.assertTrue((d / "out" / "stdout.log").read_text().startswith("ready"))
+
+    def test_full_window_is_exit_124(self):
+        d = self.project(sleep_s=30, lines=3, duration_s=1)
+        r = measure.run(config.load(d / "edgegate.yaml"), out_dir=d / "out")
+        self.assertTrue(r["command"]["timed_out"])
+        self.assertEqual(r["command"]["exit_code"], 124)
+        self.assertLess(r["command"]["wall_s"], 15)
+        self.assertEqual(r["metrics"]["detections"]["count"], 3)
+
+    def test_checks_exit_code_and_metric_thresholds(self):
+        d = self.project(sleep_s=0, lines=5, duration_s=30, thresholds="""
+            ok_exit_codes: [124]
+            metric_min: { detections: 10, missing: 1 }
+            metric_regression_pct: { detections: 10 }
+        """)
+        cfg = config.load(d / "edgegate.yaml")
+        r = measure.run(cfg, out_dir=d / "out")
+        base = json.loads(json.dumps(r)); base["metrics"]["detections"]["count"] = 8
+        by = {c.name: c for c in compare.evaluate(r, cfg["thresholds"], base)}
+        self.assertEqual(by["exit_code"].status, "fail")                       # exited 0, only 124 accepted
+        self.assertEqual(by["metric_min:detections"].status, "fail")           # 5 < 10
+        self.assertEqual(by["metric_min:missing"].status, "skip")              # file absent: not measured
+        self.assertEqual(by["metric_regression_pct:detections"].status, "fail")  # 5 vs 8 is -37.5%
+        base["metrics"]["detections"]["count"] = 5
+        by = {c.name: c for c in compare.evaluate(r, cfg["thresholds"], base)}
+        self.assertEqual(by["metric_regression_pct:detections"].status, "pass")
+        md = report.markdown(r, list(by.values()), base)
+        self.assertIn("| detections | 5", md)
+        self.assertIn("| exit code | 0", md)
+        report.junit(r, list(by.values()))
+
+    def test_config_rejects_bad_metrics_and_dataset(self):
+        d = self.project(sleep_s=0, lines=1, duration_s=5)
+        text = (d / "edgegate.yaml").read_text()
+        (d / "bad.yaml").write_text(text.replace('pattern: "detected"', 'pattern: "(unclosed"'))
+        with self.assertRaises(config.ConfigError):
+            config.load(d / "bad.yaml")
+        (d / "bad2.yaml").write_text(text + "\ndataset: { type: npz, path: x.npz }\n")
+        with self.assertRaises(config.ConfigError):
+            config.load(d / "bad2.yaml")
+
+    def test_cli_run_with_command_backend(self):
+        d = self.project(sleep_s=0, lines=4, duration_s=30, thresholds="ok_exit_codes: [0]\nmetric_min: { detections: 1 }")
+        p = subprocess.run([sys.executable, "-m", "edgegate.cli", "run", "-c", "edgegate.yaml", "-o", "r.json", "--check", "--markdown", "r.md"],
+                           cwd=d, capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(ROOT / "src")})
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("detections 4", p.stdout)
+        self.assertTrue((d / "r.d" / "events.log").exists())

@@ -16,6 +16,15 @@ edgegate run -c examples/host/edgegate.yaml --check --junit results/junit.xml --
 That generates a tiny model and dataset, benchmarks it, checks accuracy, and evaluates the thresholds in the
 config. Mislabel the dataset (`make_sample.py --wrong 20`) and the accuracy gate fails with exit code 2.
 
+## Any process as the device under test
+
+`backend: command` runs an arbitrary program (an inference engine replaying a recording, a service under load) for
+`benchmark.duration_s`, samples power and RAM meanwhile, records the peak RSS of its whole process tree, then counts
+the metrics you name as regex matches in its output files. Thresholds: `ok_exit_codes`, `metric_min`,
+`metric_regression_pct` (with `metric_regression_floor`), plus the usual power and memory checks. See
+`examples/command/`. Exit code 124 means the process was still running when the window closed, which for a
+streaming engine is the healthy outcome.
+
 ## What it measures
 
 | Measurement | Host (ONNX Runtime) | Jetson (trtexec) |

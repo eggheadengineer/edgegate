@@ -50,6 +50,14 @@ def markdown(results, checks, baseline=None):
     if r.get("accuracy"):
         a = r["accuracy"]
         lines.append(f"| accuracy {a['metric']} (n={a['n']}) | {a['value']} | {b['accuracy']['value'] if b.get('accuracy') else '—'} |")
+    if r.get("command"):
+        c, bc = r["command"], b.get("command") or {}
+        lines.append(f"| exit code | {c['exit_code']}{' (full window)' if c.get('timed_out') else ''} | {bc.get('exit_code', '—')} |")
+        lines.append(f"| wall time | {c['wall_s']} s | {bc.get('wall_s', '—')} |")
+    for name, m in (r.get("metrics") or {}).items():
+        bm = (b.get("metrics") or {}).get(name) or {}
+        per_s = f" ({m['per_s']}/s)" if m.get("per_s") is not None else ""
+        lines.append(f"| {name} | {m.get('count', '—')}{per_s} | {bm.get('count', '—')} |")
     lines += ["", "## Checks", "", "| Check | Status | Detail |", "| --- | --- | --- |"]
     for c in checks:
         lines.append(f"| {c.name} | {c.status.upper()} | {c.message} |")

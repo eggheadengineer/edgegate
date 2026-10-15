@@ -87,6 +87,28 @@ def evaluate(results, thresholds, baseline=None):
             checks.append(Check("accuracy_drop_max", "pass" if d <= drop else "fail", acc, drop, b_acc,
                                 message=f"{acc} vs baseline {b_acc} (drop {d:+.4f}, limit {drop})"))
 
+    cmd = results.get("command")
+    ok_codes = t.get("ok_exit_codes")
+    if cmd is not None and ok_codes is not None:
+        rc = cmd["exit_code"]
+        checks.append(Check("exit_code", "pass" if rc in ok_codes else "fail", rc, ok_codes,
+                            message=f"exit {rc}{' after the full window' if cmd.get('timed_out') else ''}, accepted {ok_codes}"))
+    metrics = results.get("metrics") or {}
+    b_metrics = (b.get("metrics") or {}) if b else {}
+    for name, limit in (t.get("metric_min") or {}).items():
+        absolute(f"metric_min:{name}", (metrics.get(name) or {}).get("count"), limit, higher_is_bad=False)
+    for name, pct_limit in (t.get("metric_regression_pct") or {}).items():
+        cur = (metrics.get(name) or {}).get("count")
+        base = (b_metrics.get(name) or {}).get("count")
+        if cur is None or base is None:
+            checks.append(Check(f"metric_regression_pct:{name}", "skip", cur, pct_limit, base,
+                                message="no baseline" if base is None else "not measured")); continue
+        drop_pct = (base - cur) / base * 100.0 if base else 0.0           # positive when the count fell
+        floor = (t.get("metric_regression_floor") or {}).get(name, 0)
+        ok = not (drop_pct > pct_limit and (base - cur) > floor)
+        checks.append(Check(f"metric_regression_pct:{name}", "pass" if ok else "fail", cur, pct_limit, base,
+                            message=f"{cur} vs baseline {base} ({-drop_pct:+.1f}%, limit -{pct_limit}%)"))
+
     if baseline and baseline.get("model", {}).get("sha256") == results["model"]["sha256"] \
             and baseline.get("device", {}).get("name") != results["device"]["name"]:
         checks.append(Check("baseline_device", "skip", results["device"]["name"], None, baseline["device"].get("name"),

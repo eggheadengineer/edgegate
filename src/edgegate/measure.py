@@ -3,7 +3,11 @@ import datetime as dt
 import os
 import pathlib
 import platform
+import re
+import signal
 import subprocess
+import threading
+import time
 
 import numpy as np
 
@@ -53,8 +57,120 @@ def accuracy_top1(backend, ds):
     return {"metric": "top1", "value": round(correct / total, 4), "correct": correct, "n": total}
 
 
-def run(cfg, notes=None):
+class ProcessTreeRss:
+    """Polls /proc for every process in the session started for the command and records the peak summed RSS."""
+
+    def __init__(self, sid, interval_s=0.5):
+        self.sid, self.interval_s, self.peak_mb = sid, interval_s, 0.0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+
+    def _sample(self):
+        total_kb = 0
+        for pid in os.listdir("/proc"):
+            if not pid.isdigit():
+                continue
+            try:
+                stat = pathlib.Path(f"/proc/{pid}/stat").read_text()
+                if int(stat.rsplit(")", 1)[1].split()[3]) != self.sid:     # field 6 = session id
+                    continue
+                for line in pathlib.Path(f"/proc/{pid}/status").read_text().splitlines():
+                    if line.startswith("VmRSS:"):
+                        total_kb += int(line.split()[1]); break
+            except (OSError, ValueError, IndexError):
+                continue
+        return total_kb / 1024.0
+
+    def _loop(self):
+        while not self._stop.is_set():
+            self.peak_mb = max(self.peak_mb, self._sample())
+            self._stop.wait(self.interval_s)
+
+    def __enter__(self):
+        self._thread.start(); return self
+
+    def __exit__(self, *exc):
+        self._stop.set(); self._thread.join(timeout=3)
+        self.peak_mb = max(self.peak_mb, self._sample())
+
+
+def _count_metrics(metrics, out_dir, wall_s):
+    found = {}
+    for m in metrics:
+        path = pathlib.Path(m["file"].replace("{out}", str(out_dir)))
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            found[m["name"]] = {"count": None, "per_s": None, "file": str(path), "note": "file not found"}
+            continue
+        n = len(re.findall(m["pattern"], text))
+        found[m["name"]] = {"count": n, "per_s": round(n / wall_s, 3) if wall_s else None, "file": str(path)}
+    return found
+
+
+def run_command(cfg, backend, out_dir, notes=None):
+    """The command backend: run the process for benchmark.duration_s (or until it exits), sampling meanwhile."""
+    bench = cfg["benchmark"]
+    duration = bench.get("duration_s") or 0
+    out_dir = pathlib.Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    sub = lambda x: x.replace("{out}", str(out_dir))
+    cmd = [backend.path, *[sub(a) for a in backend.args]]
+    env = {**os.environ, **{k: sub(str(v)) for k, v in backend.env.items()}}
+    stdout_path = out_dir / "stdout.log"
+    timed_out = False
+    t0 = time.monotonic()
+    with open(stdout_path, "wb") as log, make_sampler(cfg) as sampler:
+        proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=sub(backend.cwd) if backend.cwd else None,
+                                env=env, start_new_session=True)
+        with ProcessTreeRss(proc.pid) as rss:
+            try:
+                proc.wait(timeout=duration if duration > 0 else None)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                    proc.wait(timeout=10)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    proc.wait(timeout=10)
+    wall_s = round(time.monotonic() - t0, 2)
+    exit_code = 124 if timed_out else proc.returncode      # 124 mirrors coreutils timeout: ran the full window
+    power = sampler.summary()
+    memory = {"peak_rss_mb": round(rss.peak_mb, 1)}
+    if power and power.get("ram_peak_mb") is not None:
+        memory["board_ram_peak_mb"] = power.pop("ram_peak_mb")
+    elif power:
+        power.pop("ram_peak_mb", None)
+    metrics = _count_metrics(cfg.get("metrics", []), out_dir, wall_s)
+    none = {"p50": None, "p90": None, "p99": None, "mean": None, "min": None, "max": None, "n": 0,
+            "source": "n/a: command backend has no per-inference latency; see metrics[*].per_s"}
+    return {
+        "edgegate_version": __version__,
+        "created_at": _now(),
+        "device": _device_info(cfg),
+        "model": {"path": os.path.relpath(cfg["model"]["path"], cfg["_root"]), "sha256": model_sha256(cfg["model"]["path"]),
+                  "input_shape": None, **backend.describe()},
+        "benchmark": {"warmup": 0, "iterations": 0, "duration_s": duration},
+        "command": {"exit_code": exit_code, "timed_out": timed_out, "wall_s": wall_s, "stdout": str(stdout_path),
+                    "argv": cmd},
+        "metrics": metrics,
+        "latency_ms": none,
+        "throughput_ips": None,
+        "memory": memory,
+        "power": power,
+        "accuracy": None,
+        "notes": [n for n in (notes,) if n],
+    }
+
+
+def run(cfg, notes=None, out_dir=None):
     backend = make_backend(cfg)
+    if backend.name == "command":
+        return run_command(cfg, backend, out_dir or (pathlib.Path(cfg["_root"]) / "edgegate-out"), notes)
     bench = cfg["benchmark"]
     with make_sampler(cfg) as sampler:
         raw = backend.bench(bench["warmup"], bench["iterations"], bench.get("duration_s", 0))

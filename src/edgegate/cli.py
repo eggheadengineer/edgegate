@@ -45,11 +45,18 @@ def _emit(a, results, checks, baseline):
 
 def cmd_run(a):
     cfg = config.load(a.config)
-    results = measure_run(cfg, notes=a.note)
+    out_dir = pathlib.Path(a.out).with_suffix(".d")
+    results = measure_run(cfg, notes=a.note, out_dir=out_dir)
     _write(a.out, json.dumps(results, indent=1) + "\n")
     print(f"wrote {a.out}")
     lat = results["latency_ms"]
-    line = f"latency p50 {lat['p50']} ms, p99 {lat['p99']} ms, mean {lat['mean']} ms"
+    if results.get("command"):
+        c = results["command"]
+        line = f"exit {c['exit_code']}{' (full window)' if c['timed_out'] else ''} after {c['wall_s']} s"
+        for name, m in results.get("metrics", {}).items():
+            line += f" · {name} {m['count']}" + (f" ({m['per_s']}/s)" if m.get("per_s") is not None else "")
+    else:
+        line = f"latency p50 {lat['p50']} ms, p99 {lat['p99']} ms, mean {lat['mean']} ms"
     if results.get("power"):
         line += f" · power {results['power']['total_w']} W"
     if results.get("accuracy"):

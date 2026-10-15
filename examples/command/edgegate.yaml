@@ -1,0 +1,28 @@
+# Command backend: any process is the device under test. edgegate runs it for benchmark.duration_s, samples
+# power (tegrastats on Jetson) and board RAM meanwhile, records the peak RSS of the whole process tree, then
+# counts the metrics you name in its output files. Exit code 124 means "ran the full window".
+#
+# This example replays a recording through a stand-in engine (workload.py). Swap in your real one:
+#   path: /opt/engine/engine            args: ["--source", "file:///data/capture.sigmf", "--log", "{out}/engine.log"]
+#
+#   edgegate run -c examples/command/edgegate.yaml -o results/engine-A.json --check
+#   edgegate run -c examples/command/edgegate.yaml -o results/engine-B.json --check --baseline results/engine-A.json
+version: 1
+model:
+  backend: command
+  path: /usr/bin/env
+  args: ["python3", "workload.py", "--out", "{out}", "--rate", "40"]
+  env: { WORKLOAD_SEED: "1" }
+benchmark: { duration_s: 5 }
+power: { sampler: auto }
+device: { name: host }
+metrics:
+  - { name: detections, file: "{out}/events.log", pattern: "^detect " }
+  - { name: errors,     file: "{out}/events.log", pattern: "^error " }
+thresholds:
+  ok_exit_codes: [124]                 # the engine must still be running when the window closes
+  metric_min: { detections: 100 }
+  metric_regression_pct: { detections: 10 }
+  metric_regression_floor: { detections: 5 }
+  memory_regression_pct: 10
+  power_regression_pct: 10

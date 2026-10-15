@@ -155,8 +155,29 @@ class TrtexecBackend:
         return self.last
 
 
+class CommandBackend:
+    """Any process as the device under test: an inference engine replaying a recording, a service under a
+    fixed load, a whole pipeline. edgegate runs it for benchmark.duration_s, samples power and RAM meanwhile,
+    tracks the peak RSS of its process tree, then counts the metrics you name in its output files.
+    There is no per-inference latency; throughput comes from the counted events over the wall time."""
+    name = "command"
+    can_infer = False
+
+    def __init__(self, path, args, env, cwd=None):
+        self.path, self.args, self.env, self.cwd = path, list(args or []), dict(env or {}), cwd
+        self.last = None
+
+    def describe(self):
+        return {"backend": self.name, "precision": None, "version": None, "args": self.args}
+
+    def bench(self, warmup, iterations, duration_s=0):
+        raise BackendError("the command backend is driven by measure.run_command, not bench()")
+
+
 def make_backend(cfg):
     m = cfg["model"]
     if m["backend"] == "onnxruntime":
         return OnnxRuntimeBackend(m["path"], m["input"], m.get("precision", "fp32"))
+    if m["backend"] == "command":
+        return CommandBackend(m["path"], m.get("args"), m.get("env"), m.get("cwd"))
     return TrtexecBackend(m["path"], m["input"], m.get("precision", "fp16"))
