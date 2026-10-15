@@ -143,10 +143,13 @@ class TrtexecBackend:
         self._run(args, timeout=1800)
         return True
 
-    def bench(self, warmup, iterations):
+    def bench(self, warmup, iterations, duration_s=0):
+        """trtexec runs for at least `iterations` AND at least `duration_s` seconds (its own default is 3 s).
+        Power sampling needs a window long enough for DVFS to settle, so the Jetson example sets 10 s."""
         self.build()
         out = self._run([f"--loadEngine={self.engine}", f"--warmUp={max(warmup * 10, 200)}",
-                         f"--iterations={iterations}", "--percentile=99"], timeout=600)
+                         f"--iterations={iterations}", f"--duration={duration_s}", "--percentile=99"],
+                        timeout=max(600, duration_s * 3 + 120))
         self.last = parse_trtexec_output(out)
         # trtexec reports a summary, not per-iteration samples; synthesize the fields the gate needs.
         return self.last

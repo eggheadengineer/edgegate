@@ -1,7 +1,7 @@
 """Power and memory sampling during a benchmark.
 
 On Jetson, `tegrastats` prints one line per interval with per-rail power as "NAME cur_mW/avg_mW" and
-RAM as "RAM used/totalMB". Orin rails: VDD_GPU_SOC, VDD_CPU_CV, VIN_SYS_5V0. Xavier rails: VDD_IN,
+RAM as "RAM used/totalMB". Rails seen: VDD_GPU_SOC, VDD_CPU_CV, VIN_SYS_5V0 on some Orin carriers; VDD_IN,
 VDD_CPU_GPU_CV, VDD_SOC. The parser is rail-agnostic; the total is the sum of whatever rails appear,
 except that an input rail (VIN_SYS_5V0 or VDD_IN) is reported on its own as the board total when present.
 """

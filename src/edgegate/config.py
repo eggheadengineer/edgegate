@@ -4,7 +4,7 @@ import pathlib
 import yaml
 
 DEFAULTS = {
-    "benchmark": {"warmup": 20, "iterations": 200, "batch": 1},
+    "benchmark": {"warmup": 20, "iterations": 200, "batch": 1, "duration_s": 0},
     "power": {"sampler": "auto", "interval_ms": 200},
     "thresholds": {},
     "device": {"name": None},

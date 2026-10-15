@@ -16,7 +16,7 @@ model:
 #   path: imagenet-sample          # <folder>/labels.csv + images
 #   limit: 500
 #   preprocess: { size: [224, 224], mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], layout: NCHW }
-benchmark: { warmup: 50, iterations: 500 }
+benchmark: { warmup: 50, iterations: 500, duration_s: 10 }   # trtexec runs >= iterations and >= duration_s; 10 s gives tegrastats ~50 samples
 power: { sampler: tegrastats, interval_ms: 200 }
 device: { name: orin-nx }
 thresholds:

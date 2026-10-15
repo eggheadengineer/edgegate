@@ -57,7 +57,7 @@ def run(cfg, notes=None):
     backend = make_backend(cfg)
     bench = cfg["benchmark"]
     with make_sampler(cfg) as sampler:
-        raw = backend.bench(bench["warmup"], bench["iterations"])
+        raw = backend.bench(bench["warmup"], bench["iterations"], bench.get("duration_s", 0))
     power = sampler.summary()
 
     if isinstance(raw, dict):          # trtexec summary
@@ -88,7 +88,7 @@ def run(cfg, notes=None):
         "device": _device_info(cfg),
         "model": {"path": os.path.relpath(cfg["model"]["path"], cfg["_root"]), "sha256": model_sha256(cfg["model"]["path"]),
                   "input_shape": cfg["model"]["input"]["shape"], **backend.describe()},
-        "benchmark": {"warmup": bench["warmup"], "iterations": bench["iterations"]},
+        "benchmark": {"warmup": bench["warmup"], "iterations": bench["iterations"], "duration_s": bench.get("duration_s", 0)},
         "latency_ms": latency,
         "throughput_ips": throughput,
         "memory": memory,
