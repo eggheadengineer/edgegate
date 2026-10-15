@@ -54,7 +54,7 @@ class OnnxRuntimeBackend:
     def infer(self, x):
         return self.session.run([self.output_name], {self.input_name: x})[0]
 
-    def bench(self, warmup, iterations):
+    def bench(self, warmup, iterations, duration_s=0):
         x = _random_input(self.shape, self.dtype)
         for _ in range(warmup):
             self.infer(x)
