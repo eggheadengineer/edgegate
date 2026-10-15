@@ -103,7 +103,7 @@ def _count_metrics(metrics, out_dir, wall_s):
         except OSError:
             found[m["name"]] = {"count": None, "per_s": None, "file": str(path), "note": "file not found"}
             continue
-        n = len(re.findall(m["pattern"], text))
+        n = len(re.findall(m["pattern"], text, re.MULTILINE))   # ^ and $ anchor per line, as in grep
         found[m["name"]] = {"count": n, "per_s": round(n / wall_s, 3) if wall_s else None, "file": str(path)}
     return found
 

@@ -295,7 +295,7 @@ class Command(unittest.TestCase):
             power: {{ sampler: none }}
             device: {{ name: host }}
             metrics:
-              - {{ name: detections, file: "{{out}}/events.log", pattern: "detected" }}
+              - {{ name: detections, file: "{{out}}/events.log", pattern: "^event .* detected$" }}
               - {{ name: missing, file: "{{out}}/nope.log", pattern: "x" }}
             thresholds:
             __THR__
