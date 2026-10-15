@@ -1,0 +1,62 @@
+{
+ "edgegate_version": "0.1.0",
+ "created_at": "2026-10-15T21:55:39Z",
+ "device": {
+  "name": "orin-nx",
+  "hostname": "orin-nx",
+  "machine": "aarch64",
+  "python": "3.10.12",
+  "l4t": "# R36 (release), REVISION: 5.0, GCID: 43688277, BOARD: generic, EABI: aarch64, DATE: Fri Jan 16 03:50:45 UTC 2026",
+  "model": "NVIDIA Jetson Orin NX Engineering Reference Developer Kit Super",
+  "power_mode": "40W"
+ },
+ "model": {
+  "path": "resnet50-v2-7.onnx",
+  "sha256": "sha256:79102261eb6e5fd7af5d27f41316293e388c5cb691e5d25bfb035c4f64fefe31",
+  "input_shape": [
+   1,
+   3,
+   224,
+   224
+  ],
+  "backend": "trtexec",
+  "trtexec": "/usr/src/tensorrt/bin/trtexec",
+  "version": "100300",
+  "precision": "fp16",
+  "engine": "/home/jetson/edgegate/examples/jetson/.edgegate-engines/resnet50-v2-7-79102261eb6e-fp16-1x3x224x224.engine"
+ },
+ "benchmark": {
+  "warmup": 50,
+  "iterations": 500,
+  "duration_s": 10
+ },
+ "latency_ms": {
+  "p50": 2.32019,
+  "p90": null,
+  "p99": 2.33496,
+  "mean": 2.32043,
+  "min": 2.30511,
+  "max": 2.43433,
+  "n": 500,
+  "source": "trtexec summary"
+ },
+ "throughput_ips": 439.773,
+ "memory": {
+  "peak_rss_mb": 30.9,
+  "board_ram_peak_mb": 855
+ },
+ "power": {
+  "rails_w": {
+   "VDD_CPU_GPU_CV": 9.226,
+   "VDD_IN": 18.282,
+   "VDD_SOC": 4.189
+  },
+  "total_w": 18.282,
+  "total_rail": "VDD_IN",
+  "samples": 54
+ },
+ "accuracy": null,
+ "notes": [
+  "nvpmodel 4 40W, DVFS, 10 s window"
+ ]
+}
