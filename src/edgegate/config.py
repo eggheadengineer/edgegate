@@ -88,6 +88,8 @@ def load(path):
 
     cfg["_root"] = path.resolve().parent
     cfg["model"]["path"] = str((cfg["_root"] / model["path"]).resolve())
+    if model["backend"] == "command":        # relative args and files resolve against the config's directory
+        model["cwd"] = str((cfg["_root"] / model["cwd"]).resolve()) if model.get("cwd") else str(cfg["_root"])
     if ds is not None:
         ds["path"] = str((cfg["_root"] / ds["path"]).resolve())
     return cfg

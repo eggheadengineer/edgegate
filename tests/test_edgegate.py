@@ -360,3 +360,13 @@ class Command(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("detections 4", p.stdout)
         self.assertTrue((d / "r.d" / "events.log").exists())
+
+    def test_relative_args_resolve_against_config_dir(self):
+        d = self.project(sleep_s=0, lines=2, duration_s=10)
+        text = (d / "edgegate.yaml").read_text().replace(f'"{d / "work.py"}"', '"work.py"')
+        (d / "edgegate.yaml").write_text(text)
+        cfg = config.load(d / "edgegate.yaml")
+        self.assertEqual(cfg["model"]["cwd"], str(d))
+        r = measure.run(cfg, out_dir=d / "out")
+        self.assertEqual(r["command"]["exit_code"], 0)
+        self.assertEqual(r["metrics"]["detections"]["count"], 2)
