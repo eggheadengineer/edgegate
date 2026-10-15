@@ -370,3 +370,26 @@ class Command(unittest.TestCase):
         r = measure.run(cfg, out_dir=d / "out")
         self.assertEqual(r["command"]["exit_code"], 0)
         self.assertEqual(r["metrics"]["detections"]["count"], 2)
+
+
+class Timeline(unittest.TestCase):
+    def test_write_timeline_merges_rails_ram_and_extra(self):
+        d = pathlib.Path(tempfile.mkdtemp(prefix="edgegate-tl-"))
+        samples = [{"t_s": 0.5, "ram_mb": 1000, "rails": {"VDD_IN": 5000, "VDD_SOC": 1200}},
+                   {"t_s": 1.0, "ram_mb": 1010, "rails": {"VDD_IN": 5200, "VDD_SOC": 1250}}]
+        n = sampler.write_timeline(d / "t.csv", samples, {"process_rss_mb": [(0.5, 300.0), (1.5, 310.0)]})
+        self.assertEqual(n, 3)
+        rows = (d / "t.csv").read_text().splitlines()
+        self.assertEqual(rows[0], "t_s,ram_mb,VDD_IN_w,VDD_SOC_w,process_rss_mb")
+        self.assertEqual(rows[1], "0.5,1000,5.0,1.2,300.0")
+        self.assertEqual(rows[3], "1.5,,,,310.0")
+        self.assertEqual(sampler.write_timeline(d / "e.csv", [], None), 0)
+
+    def test_command_run_writes_rss_timeline_without_tegrastats(self):
+        c = Command(); d = c.project(sleep_s=1.2, lines=1, duration_s=10)
+        r = measure.run(config.load(d / "edgegate.yaml"), out_dir=d / "out")
+        self.assertTrue(r["command"]["timeline"].endswith("timeline.csv"))
+        rows = (d / "out" / "timeline.csv").read_text().splitlines()
+        self.assertEqual(rows[0], "t_s,ram_mb,process_rss_mb")
+        self.assertGreaterEqual(len(rows), 3)
+        self.assertIn("started_at", r["command"])

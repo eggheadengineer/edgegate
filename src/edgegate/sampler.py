@@ -52,6 +52,7 @@ class TegrastatsSampler:
         return shutil.which("tegrastats") is not None
 
     def __enter__(self):
+        self._t0 = time.monotonic()
         self._proc = subprocess.Popen(["tegrastats", "--interval", str(self.interval_ms)],
                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         self._thread = threading.Thread(target=self._pump, daemon=True)
@@ -61,7 +62,9 @@ class TegrastatsSampler:
 
     def _pump(self):
         for line in self._proc.stdout:
-            self.samples.append(parse_tegrastats_line(line))
+            sample = parse_tegrastats_line(line)
+            sample["t_s"] = round(time.monotonic() - self._t0, 3)
+            self.samples.append(sample)
 
     def __exit__(self, *exc):
         if self._proc:
@@ -77,7 +80,13 @@ class TegrastatsSampler:
         return summarize(self.samples)
 
 
+    def timeline(self):
+        return self.samples
+
+
 class NoSampler:
+    samples = []
+
     def __enter__(self):
         return self
 
@@ -86,6 +95,33 @@ class NoSampler:
 
     def summary(self):
         return None
+
+    def timeline(self):
+        return []
+
+
+def write_timeline(path, samples, extra=None):
+    """CSV of every sample: t_s, ram_mb, one column per rail in W, plus optional extra rows merged by time
+    (extra = {"column": [(t_s, value), ...]}). Returns the number of rows written, 0 if nothing to write."""
+    samples = [s for s in samples if s.get("t_s") is not None]
+    if not samples and not extra:
+        return 0
+    rails = sorted({n for s in samples for n in s["rails"]})
+    cols = ["t_s", "ram_mb"] + [f"{r}_w" for r in rails] + sorted(extra or {})
+    rows = {}
+    for s in samples:
+        rows.setdefault(s["t_s"], {})
+        rows[s["t_s"]].update({"ram_mb": s["ram_mb"], **{f"{r}_w": round(s["rails"].get(r, 0) / 1000.0, 3) for r in rails}})
+    for col, series in (extra or {}).items():
+        for t, v in series:
+            rows.setdefault(round(t, 3), {})[col] = v
+    import csv
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        for t in sorted(rows):
+            w.writerow([t] + [rows[t].get(c, "") for c in cols[1:]])
+    return len(rows)
 
 
 def make_sampler(cfg):

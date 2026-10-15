@@ -13,7 +13,7 @@ import numpy as np
 
 from . import __version__, dataset
 from .backends import BackendError, make_backend, model_sha256
-from .sampler import make_sampler, peak_rss_mb
+from .sampler import make_sampler, peak_rss_mb, write_timeline
 
 
 def _now():
@@ -62,6 +62,8 @@ class ProcessTreeRss:
 
     def __init__(self, sid, interval_s=0.5):
         self.sid, self.interval_s, self.peak_mb = sid, interval_s, 0.0
+        self.series = []                      # (t_s, rss_mb) for the timeline
+        self._t0 = time.monotonic()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
 
@@ -83,7 +85,9 @@ class ProcessTreeRss:
 
     def _loop(self):
         while not self._stop.is_set():
-            self.peak_mb = max(self.peak_mb, self._sample())
+            mb = self._sample()
+            self.series.append((round(time.monotonic() - self._t0, 3), round(mb, 1)))
+            self.peak_mb = max(self.peak_mb, mb)
             self._stop.wait(self.interval_s)
 
     def __enter__(self):
@@ -119,6 +123,7 @@ def run_command(cfg, backend, out_dir, notes=None):
     env = {**os.environ, **{k: sub(str(v)) for k, v in backend.env.items()}}
     stdout_path = out_dir / "stdout.log"
     timed_out = False
+    started_at = _now()
     t0 = time.monotonic()
     with open(stdout_path, "wb") as log, make_sampler(cfg) as sampler:
         proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=sub(backend.cwd) if backend.cwd else None,
@@ -146,6 +151,9 @@ def run_command(cfg, backend, out_dir, notes=None):
     elif power:
         power.pop("ram_peak_mb", None)
     metrics = _count_metrics(cfg.get("metrics", []), out_dir, wall_s)
+    timeline = None
+    if write_timeline(out_dir / "timeline.csv", sampler.timeline(), {"process_rss_mb": rss.series}):
+        timeline = str(out_dir / "timeline.csv")
     none = {"p50": None, "p90": None, "p99": None, "mean": None, "min": None, "max": None, "n": 0,
             "source": "n/a: command backend has no per-inference latency; see metrics[*].per_s"}
     return {
@@ -156,7 +164,7 @@ def run_command(cfg, backend, out_dir, notes=None):
                   "input_shape": None, **backend.describe()},
         "benchmark": {"warmup": 0, "iterations": 0, "duration_s": duration},
         "command": {"exit_code": exit_code, "timed_out": timed_out, "wall_s": wall_s, "stdout": str(stdout_path),
-                    "argv": cmd},
+                    "argv": cmd, "timeline": timeline, "started_at": started_at},
         "metrics": metrics,
         "latency_ms": none,
         "throughput_ips": None,
@@ -175,6 +183,10 @@ def run(cfg, notes=None, out_dir=None):
     with make_sampler(cfg) as sampler:
         raw = backend.bench(bench["warmup"], bench["iterations"], bench.get("duration_s", 0))
     power = sampler.summary()
+    if power and out_dir:
+        pathlib.Path(out_dir).mkdir(parents=True, exist_ok=True)
+        if write_timeline(pathlib.Path(out_dir) / "timeline.csv", sampler.timeline()):
+            power["timeline"] = str(pathlib.Path(out_dir) / "timeline.csv")
 
     if isinstance(raw, dict):          # trtexec summary
         latency = {"p50": raw["median"], "p90": None, "p99": raw.get("p99"), "mean": raw["mean"],
