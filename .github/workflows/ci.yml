@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install --quiet -e ".[dev]"
+      - run: python -m unittest discover -s tests -v
+
+  host-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet -e ".[dev]"
+      - name: Baseline
+        run: |
+          python examples/host/make_sample.py
+          edgegate run -c examples/host/edgegate.yaml -o results/baseline.json
+      - name: Gate passes on an unchanged build
+        run: edgegate run -c examples/host/edgegate.yaml -o results/same.json --check --baseline results/baseline.json --junit results/junit-same.xml --markdown results/same.md
+      - name: Gate fails on an accuracy regression
+        run: |
+          python examples/host/make_sample.py --wrong 20
+          set +e
+          edgegate run -c examples/host/edgegate.yaml -o results/bad.json --check --baseline results/baseline.json --junit results/junit-bad.xml --markdown results/bad.md
+          code=$?
+          set -e
+          test "$code" -eq 2 || { echo "expected exit 2, got $code"; exit 1; }
+          grep -q 'name="accuracy_drop_max"' results/junit-bad.xml
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: edgegate-results
+          path: results/

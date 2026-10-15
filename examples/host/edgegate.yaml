@@ -1,0 +1,16 @@
+# Host example: runs anywhere with `pip install edgegate[host]`. Generate the inputs first:
+#   python examples/host/make_sample.py
+version: 1
+model:
+  path: tiny.onnx
+  backend: onnxruntime
+  input: { shape: [1, 8] }
+dataset: { type: npz, path: sample.npz }
+benchmark: { warmup: 20, iterations: 300 }
+power: { sampler: auto }          # tegrastats if present, otherwise no power measurement
+device: { name: host }
+thresholds:
+  latency_p99_ms_max: 5
+  accuracy_min: 0.99
+  latency_p99_regression_pct: 50
+  accuracy_drop_max: 0.0

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edgegate"
+dynamic = ["version"]
+description = "CI gate for model-plus-firmware builds on edge devices: latency, memory, power, accuracy, compared to a baseline."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "James Watson" }]
+keywords = ["edge ai", "jetson", "tensorrt", "onnxruntime", "ci", "regression", "benchmark", "embedded"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Embedded Systems",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = ["numpy>=1.24", "PyYAML>=6"]
+
+[project.optional-dependencies]
+host = ["onnxruntime>=1.16", "Pillow>=10"]
+dev = ["onnx>=1.15", "onnxruntime>=1.16", "Pillow>=10"]
+
+[project.urls]
+Homepage = "https://github.com/eggheadengineer/edgegate"
+
+[project.scripts]
+edgegate = "edgegate.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "edgegate.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,28 @@
+# Jetson example: ResNet-50 through TensorRT (trtexec) with tegrastats power sampling.
+#   ./examples/jetson/fetch_model.sh
+#   edgegate run -c examples/jetson/edgegate.yaml -o results/orin-nx-15w.json --check --junit results/junit.xml --markdown results/report.md
+#
+# Accuracy needs a labeled image folder (labels.csv: path,label with ImageNet class indices) and onnxruntime
+# on the device (NVIDIA publishes Jetson wheels). Without it, latency/memory/power still run and accuracy is
+# reported as skipped, not failed.
+version: 1
+model:
+  path: resnet50-v2-7.onnx
+  backend: trtexec
+  precision: fp16
+  input: { name: data, shape: [1, 3, 224, 224] }
+# dataset:
+#   type: image_folder
+#   path: imagenet-sample          # <folder>/labels.csv + images
+#   limit: 500
+#   preprocess: { size: [224, 224], mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], layout: NCHW }
+benchmark: { warmup: 50, iterations: 500 }
+power: { sampler: tegrastats, interval_ms: 200 }
+device: { name: orin-nx }
+thresholds:
+  latency_p99_ms_max: 15
+  power_w_max: 20
+  latency_p99_regression_pct: 10
+  power_regression_pct: 10
+  memory_regression_pct: 10
+  accuracy_drop_max: 0.005
