@@ -346,7 +346,7 @@ class Command(unittest.TestCase):
     def test_config_rejects_bad_metrics_and_dataset(self):
         d = self.project(sleep_s=0, lines=1, duration_s=5)
         text = (d / "edgegate.yaml").read_text()
-        (d / "bad.yaml").write_text(text.replace('pattern: "detected"', 'pattern: "(unclosed"'))
+        (d / "bad.yaml").write_text(text.replace('pattern: "^event .* detected$"', 'pattern: "(unclosed"'))
         with self.assertRaises(config.ConfigError):
             config.load(d / "bad.yaml")
         (d / "bad2.yaml").write_text(text + "\ndataset: { type: npz, path: x.npz }\n")
