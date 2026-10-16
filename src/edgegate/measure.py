@@ -136,7 +136,9 @@ def forensics(samples, rss_series, end_t_s, window_s=30.0):
             if span and abs(v - last) > span * 0.25:
                 swings += 1; last = v
         out["ram_swings"] = swings
-        out["ram_pattern"] = "plateau" if swings <= 1 or span < 512 else "cycling"
+        # plateau: steady (a healthy engine after warm-up). step: one excursion, up or up-and-back (a load
+        # spike, or a crash right after one). cycling: repeated large swings (an allocation that keeps failing).
+        out["ram_pattern"] = "plateau" if span < 512 or swings <= 1 else ("step" if swings == 2 else "cycling")
     rails = sorted({n for x in win for n in x["rails"]})
     if rails:
         out["rails_w"] = {r: round(sum(x["rails"].get(r, 0) for x in win) / len(win) / 1000.0, 2) for r in rails}

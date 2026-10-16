@@ -424,6 +424,49 @@ class Forensics(unittest.TestCase):
         self.assertGreaterEqual(fx["ram_swings"], 8)
 
 
+class ForensicShapes(unittest.TestCase):
+    """The three memory shapes a 42-run Jetson matrix produced, synthesized: the classifier must tell them apart."""
+
+    @staticmethod
+    def ram(shape, n=150):
+        # one warm-up spike to the high level around 20-25 s, then the shape
+        out = []
+        for t in range(n):
+            if 20 <= t < 25:
+                v = 11300
+            elif shape == "healthy":
+                v = 4600 + (t % 3) * 15
+            elif shape == "cycling":
+                v = 11400 if (t // 3) % 2 else 4600
+            else:
+                v = 4600
+            out.append({"t_s": float(t), "ram_mb": v, "rails": {"VDD_CPU_GPU_CV": 8000 if t > 22 else 2000}})
+        return out
+
+    def test_healthy_tail_is_a_plateau(self):
+        rss = [(float(t), 12000.0) for t in range(150)]
+        fx = measure.forensics(self.ram("healthy"), rss, 150.0)
+        self.assertIsNone(fx["death_t_s"])
+        self.assertEqual(fx["ram_pattern"], "plateau")
+        self.assertEqual(fx["rails_w"]["VDD_CPU_GPU_CV"], 8.0)
+
+    def test_crash_right_after_the_warmup_spike_is_a_step(self):
+        samples = [x for x in self.ram("healthy") if x["t_s"] <= 36]
+        rss = [(float(t), 12000.0 if t < 35 else 3.0) for t in range(37)]
+        fx = measure.forensics(samples, rss, 36.0)
+        self.assertEqual(fx["death_t_s"], 34.0)
+        self.assertEqual(fx["ram_pattern"], "step")
+        self.assertEqual(fx["ram_mb"]["max"], 11300)
+
+    def test_repeated_allocation_failure_is_cycling(self):
+        samples = [x for x in self.ram("cycling") if x["t_s"] <= 60]
+        rss = [(float(t), 12300.0 if t < 59 else 2.0) for t in range(61)]
+        fx = measure.forensics(samples, rss, 60.0)
+        self.assertEqual(fx["ram_pattern"], "cycling")
+        self.assertGreaterEqual(fx["ram_swings"], 6)
+        self.assertEqual(fx["death_t_s"], 58.0)
+
+
 class BaselineValidity(unittest.TestCase):
     def results(self, exit_code=124, gate=None):
         r = {"latency_ms": {"p99": None}, "memory": {"peak_rss_mb": 100.0, "board_ram_peak_mb": 5000}, "power": {"total_w": 10.0},
@@ -526,6 +569,42 @@ class Matrix(unittest.TestCase):
         (self.d / "bad2.yaml").write_text("version: 1\nbase: edgegate.yaml\ncells: [{name: a, power_mode: '3'}]\n")
         with self.assertRaises(config.ConfigError):
             self.mx.load_matrix(self.d / "bad2.yaml")
+
+    def test_cells_are_interleaved_rep_major(self):
+        m = self.mx.load_matrix(self.d / "matrix.yaml")
+        self.mx.run_matrix(m, self.d / "out", log=lambda s: None)
+        order = [l.split("== ")[1].split(" ")[0] for l in (self.d / "out" / "LOG").read_text().splitlines() if "== " in l]
+        self.assertEqual(order, ["baseline", "batch2", "flaky", "baseline", "batch2", "flaky"])
+
+    def test_reboot_requiring_power_mode_is_refused_not_rebooted(self):
+        import subprocess as sp
+        calls = []
+        class P:  # fake CompletedProcess for `nvpmodel -m`
+            stdout = "NVPM WARN: Reboot required for changing to this power mode: 1\nNVPM WARN: DO YOU WANT TO REBOOT NOW? enter YES/yes to confirm:\n"; stderr = ""
+        real_run = sp.run
+        def fake_run(cmd, **kw):
+            calls.append((cmd, kw.get("input")))
+            if cmd[:3] == ["sudo", "-n", "nvpmodel"] and "-q" in cmd:
+                return type("Q", (), {"stdout": "NV Power Mode: MAXN_SUPER\n"})()
+            return P()
+        sp.run = fake_run
+        try:
+            with self.assertRaises(self.mx.MatrixError) as cm:
+                self.mx.set_power_mode(1, {0: "MAXN_SUPER", 1: "10W"})
+        finally:
+            sp.run = real_run
+        self.assertIn("requires a reboot", str(cm.exception))
+        self.assertTrue(any(inp == "no\n" for _, inp in calls))       # we answered the reboot prompt with no
+
+    def test_crashed_run_cannot_become_a_baseline_via_cli(self):
+        env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+        d = Command().project(sleep_s=0, lines=4, duration_s=30, thresholds="ok_exit_codes: [124]\nmetric_regression_pct: { detections: 10 }")
+        p = subprocess.run([sys.executable, "-m", "edgegate.cli", "run", "-c", "edgegate.yaml", "-o", "a.json", "--check"], cwd=d, capture_output=True, text=True, env=env)
+        self.assertEqual(p.returncode, 2)                                 # exited 0, only 124 accepted: this run failed its gate
+        self.assertEqual(json.loads((d / "a.json").read_text())["gate"]["status"], "fail")
+        p = subprocess.run([sys.executable, "-m", "edgegate.cli", "run", "-c", "edgegate.yaml", "-o", "b.json", "--check", "--baseline", "a.json"], cwd=d, capture_output=True, text=True, env=env)
+        self.assertIn("FAIL  baseline_valid", p.stdout)
+        self.assertIn("SKIP  metric_regression_pct:detections", p.stdout)
 
     def test_cli_matrix(self):
         p = subprocess.run([sys.executable, "-m", "edgegate.cli", "matrix", "-c", "matrix.yaml", "-o", "out", "--junit", "m.xml"],
