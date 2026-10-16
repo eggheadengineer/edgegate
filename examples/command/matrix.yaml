@@ -1,0 +1,13 @@
+# A matrix of variants x repeats on the stand-in engine. Cells are interleaved and the run is resumable.
+#   edgegate matrix -c examples/command/matrix.yaml -o results/matrix --junit results/matrix.xml
+version: 1
+base: edgegate.yaml
+repeats: 3
+duration_s: 4
+max_crash_rate: 0            # any crash fails the cell
+# stale_processes: [myengine]  # on a real engine: kill leftovers (by /proc comm prefix) before each run
+cells:
+  - { name: baseline, note: "rate 40, batch 1" }
+  - { name: batch2,   args: { set: { "--batch": "2" } }, note: "the batch bug: crashes before emitting anything" }
+  - { name: slow,     args: { set: { "--rate": "10" } } }
+  - { name: flaky,    env: { WORKLOAD_CRASH_AFTER: "2" }, note: "dies at 2 s every time" }

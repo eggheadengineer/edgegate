@@ -16,6 +16,18 @@ edgegate run -c examples/host/edgegate.yaml --check --junit results/junit.xml --
 That generates a tiny model and dataset, benchmarks it, checks accuracy, and evaluates the thresholds in the
 config. Mislabel the dataset (`make_sample.py --wrong 20`) and the accuracy gate fails with exit code 2.
 
+## Variants x repeats: `edgegate matrix`
+
+A matrix file names a base config and a list of cells (argument, environment, duration or nvpmodel variants) plus a
+repeat count. `edgegate matrix` runs them interleaved so drift cannot favour one cell, skips runs that already have a
+results file so an interrupted matrix resumes, kills stale processes between runs, and tabulates crash rate, time to
+crash, clean-run rates, power and RAM per cell, with one JUnit case per cell. Every crashed run carries a forensics
+block: when the process tree's memory collapsed and what RAM, rails and RSS did in the last 30 s before it, classified
+as a plateau or allocation cycling. See `examples/command/matrix.yaml`.
+
+A baseline that failed its own gate, or whose process exited outside `ok_exit_codes`, is refused for regression checks
+(`baseline_valid` fails and the comparisons are skipped). Set `thresholds.baseline_must_pass: false` to override.
+
 ## Any process as the device under test
 
 `backend: command` runs an arbitrary program (an inference engine replaying a recording, a service under load) for

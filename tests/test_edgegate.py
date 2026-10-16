@@ -330,6 +330,7 @@ class Command(unittest.TestCase):
         cfg = config.load(d / "edgegate.yaml")
         r = measure.run(cfg, out_dir=d / "out")
         base = json.loads(json.dumps(r)); base["metrics"]["detections"]["count"] = 8
+        base["command"]["exit_code"] = 124; base["command"]["timed_out"] = True     # a valid baseline (ran the full window)
         by = {c.name: c for c in compare.evaluate(r, cfg["thresholds"], base)}
         self.assertEqual(by["exit_code"].status, "fail")                       # exited 0, only 124 accepted
         self.assertEqual(by["metric_min:detections"].status, "fail")           # 5 < 10
@@ -403,3 +404,132 @@ class Timeline(unittest.TestCase):
         self.assertEqual(rows[0], "t_s,ram_mb,process_rss_mb")
         self.assertGreaterEqual(len(rows), 3)
         self.assertIn("started_at", r["command"])
+
+
+class Forensics(unittest.TestCase):
+    def test_plateau_and_death_detection(self):
+        samples = [{"t_s": t, "ram_mb": 4600 + (t % 2) * 10, "rails": {"VDD_IN": 12000}} for t in range(0, 60)]
+        rss = [(t, 12000.0 if t < 40 else 5.0) for t in range(0, 60)]
+        fx = measure.forensics(samples, rss, 60.0)
+        self.assertEqual(fx["death_t_s"], 39.0)
+        self.assertEqual(fx["ram_pattern"], "plateau")
+        self.assertEqual(fx["rails_w"]["VDD_IN"], 12.0)
+        self.assertEqual(fx["process_rss_mb"]["max"], 12000)
+
+    def test_cycling_pattern(self):
+        samples = [{"t_s": t, "ram_mb": 11400 if (t // 3) % 2 else 4600, "rails": {}} for t in range(0, 60)]
+        fx = measure.forensics(samples, [(t, 12000.0) for t in range(0, 60)], 60.0)
+        self.assertIsNone(fx["death_t_s"])                 # never collapsed
+        self.assertEqual(fx["ram_pattern"], "cycling")
+        self.assertGreaterEqual(fx["ram_swings"], 8)
+
+
+class BaselineValidity(unittest.TestCase):
+    def results(self, exit_code=124, gate=None):
+        r = {"latency_ms": {"p99": None}, "memory": {"peak_rss_mb": 100.0, "board_ram_peak_mb": 5000}, "power": {"total_w": 10.0},
+             "accuracy": None, "model": {"sha256": "x"}, "device": {"name": "d"}, "created_at": "t",
+             "command": {"exit_code": exit_code, "timed_out": exit_code == 124, "wall_s": 90.0},
+             "metrics": {"bearings": {"count": 200, "per_s": 2.2}}}
+        if gate: r["gate"] = gate
+        return r
+
+    def test_crashed_baseline_is_refused(self):
+        t = {"ok_exit_codes": [124], "power_regression_pct": 15, "metric_regression_pct": {"bearings": 15}}
+        by = {c.name: c for c in compare.evaluate(self.results(), t, self.results(exit_code=250))}
+        self.assertEqual(by["baseline_valid"].status, "fail")
+        self.assertEqual(by["power_regression_pct"].status, "skip")
+        self.assertEqual(by["metric_regression_pct:bearings"].status, "skip")
+
+    def test_gate_failed_baseline_is_refused_and_override_works(self):
+        t = {"ok_exit_codes": [124], "power_regression_pct": 15}
+        base = self.results(gate={"status": "fail", "failed": ["metric_min:bearings"]})
+        by = {c.name: c for c in compare.evaluate(self.results(), t, base)}
+        self.assertEqual(by["baseline_valid"].status, "fail")
+        by = {c.name: c for c in compare.evaluate(self.results(), {**t, "baseline_must_pass": False}, base)}
+        self.assertNotIn("baseline_valid", by)
+        self.assertEqual(by["power_regression_pct"].status, "pass")
+
+    def test_good_baseline_passes_through(self):
+        t = {"ok_exit_codes": [124], "power_regression_pct": 15}
+        by = {c.name: c for c in compare.evaluate(self.results(), t, self.results(gate={"status": "pass", "failed": []}))}
+        self.assertNotIn("baseline_valid", by)
+
+
+class Matrix(unittest.TestCase):
+    def setUp(self):
+        from edgegate import matrix as mx
+        self.mx = mx
+        self.d = pathlib.Path(tempfile.mkdtemp(prefix="edgegate-mx-"))
+        (self.d / "work.py").write_text((ROOT / "examples/command/workload.py").read_text())
+        (self.d / "edgegate.yaml").write_text(textwrap.dedent(f"""
+            version: 1
+            model:
+              backend: command
+              path: {sys.executable}
+              args: ["work.py", "--out", "{{out}}", "--rate", "50"]
+            benchmark: {{ duration_s: 1.5 }}
+            power: {{ sampler: none }}
+            device: {{ name: host }}
+            metrics:
+              - {{ name: detections, file: "{{out}}/events.log", pattern: "^detect " }}
+            thresholds:
+              ok_exit_codes: [124]
+              metric_min: {{ detections: 5 }}
+        """))
+        (self.d / "matrix.yaml").write_text(textwrap.dedent("""
+            version: 1
+            base: edgegate.yaml
+            repeats: 2
+            cells:
+              - { name: baseline }
+              - { name: batch2, args: { set: { "--batch": "2" } }, note: "always dies" }
+              - { name: flaky, env: { WORKLOAD_CRASH_AFTER: "0.5" } }
+        """))
+
+    def test_load_apply_and_dry_run(self):
+        m = self.mx.load_matrix(self.d / "matrix.yaml")
+        base = config.load(m["base"])
+        cfg = self.mx.apply_cell(base, m["cells"][1], m)
+        self.assertEqual(cfg["model"]["args"][-2:], ["--batch", "2"])
+        cfg = self.mx.apply_cell(base, m["cells"][2], m)
+        self.assertEqual(cfg["model"]["env"]["WORKLOAD_CRASH_AFTER"], "0.5")
+        self.assertEqual(base["model"].get("env"), None)             # base untouched
+        lines = []
+        self.mx.run_matrix(m, self.d / "out", log=lines.append, dry_run=True)
+        self.assertEqual(sum("[dry]" in l for l in lines), 6)
+
+    def test_run_tabulate_resume_and_reports(self):
+        m = self.mx.load_matrix(self.d / "matrix.yaml")
+        summary = self.mx.run_matrix(m, self.d / "out", log=lambda s: None)
+        by = {c["name"]: c for c in summary["cells"]}
+        self.assertEqual((by["baseline"]["crashed"], by["baseline"]["n"], by["baseline"]["status"]), (0, 2, "pass"))
+        self.assertEqual((by["batch2"]["crashed"], by["batch2"]["status"]), (2, "fail"))
+        self.assertEqual(by["flaky"]["crashed"], 2)
+        self.assertGreater(by["baseline"]["clean_rates"]["detections"], 20)
+        self.assertTrue(all(0.4 < t < 1.2 for t in by["flaky"]["time_to_crash_s"]))
+        # resume: nothing new runs
+        lines = []
+        self.mx.run_matrix(m, self.d / "out", log=lines.append)
+        self.assertTrue(any("0 new runs, 6 already present" in l for l in lines))
+        md = self.mx.markdown(summary); ju = self.mx.junit(summary)
+        self.assertIn("| batch2 (always dies) | 2 / 2 |", md)
+        self.assertIn('failures="2"', ju)
+        self.assertTrue((self.d / "out" / "summary.json").exists())
+        self.assertTrue((self.d / "out" / "LOG").exists())
+
+    def test_power_modes_parse_and_bad_matrix_files(self):
+        conf = "< POWER_MODEL ID=0 NAME=MAXN_SUPER >\n< POWER_MODEL ID=3 NAME=25W >\n"
+        self.assertEqual(self.mx.power_modes(conf), {0: "MAXN_SUPER", 3: "25W"})
+        (self.d / "bad.yaml").write_text("version: 1\nbase: edgegate.yaml\ncells: [{name: a}, {name: a}]\n")
+        with self.assertRaises(config.ConfigError):
+            self.mx.load_matrix(self.d / "bad.yaml")
+        (self.d / "bad2.yaml").write_text("version: 1\nbase: edgegate.yaml\ncells: [{name: a, power_mode: '3'}]\n")
+        with self.assertRaises(config.ConfigError):
+            self.mx.load_matrix(self.d / "bad2.yaml")
+
+    def test_cli_matrix(self):
+        p = subprocess.run([sys.executable, "-m", "edgegate.cli", "matrix", "-c", "matrix.yaml", "-o", "out", "--junit", "m.xml"],
+                           cwd=self.d, capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(ROOT / "src")})
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)       # batch2 and flaky fail their cells
+        self.assertIn("| baseline | 0 / 2 |", p.stdout)
+        self.assertTrue((self.d / "m.xml").exists())

@@ -58,6 +58,18 @@ def markdown(results, checks, baseline=None):
         bm = (b.get("metrics") or {}).get(name) or {}
         per_s = f" ({m['per_s']}/s)" if m.get("per_s") is not None else ""
         lines.append(f"| {name} | {m.get('count', '—')}{per_s} | {bm.get('count', '—')} |")
+    fx = (r.get("command") or {}).get("forensics")
+    if fx and (r["command"]["exit_code"] != 124 or fx.get("death_t_s") is not None):
+        lines += ["", f"## Last {fx['window_s']:.0f} s before the process died", ""]
+        if fx.get("death_t_s") is not None:
+            lines.append(f"- process memory collapsed at {fx['death_t_s']} s ({fx['samples']} samples in the window)")
+        if fx.get("ram_mb"):
+            m = fx["ram_mb"]
+            lines.append(f"- board RAM {m['min']}–{m['max']} MB (mean {m['mean']}), {fx.get('ram_swings', 0)} large swings: **{fx.get('ram_pattern')}**")
+        if fx.get("rails_w"):
+            lines.append("- rails: " + ", ".join(f"{k} {v} W" for k, v in fx["rails_w"].items()))
+        if fx.get("process_rss_mb"):
+            lines.append(f"- process RSS {fx['process_rss_mb']['min']}–{fx['process_rss_mb']['max']} MB")
     lines += ["", "## Checks", "", "| Check | Status | Detail |", "| --- | --- | --- |"]
     for c in checks:
         lines.append(f"| {c.name} | {c.status.upper()} | {c.message} |")

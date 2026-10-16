@@ -10,6 +10,7 @@ from .compare import evaluate, status
 from .dataset import DatasetError
 from .measure import run as measure_run
 from .report import junit, markdown
+from . import matrix as matrix_mod
 
 EXIT_OK, EXIT_ERROR, EXIT_FAIL = 0, 1, 2
 
@@ -66,7 +67,12 @@ def cmd_run(a):
         print(f"note: {n}")
     if a.check:
         baseline = _load_json(a.baseline, "baseline") if a.baseline else None
-        return _emit(a, results, evaluate(results, cfg["thresholds"], baseline), baseline)
+        checks = evaluate(results, cfg["thresholds"], baseline)
+        # record the verdict in the results file so a later run can tell whether this one is fit to be a baseline
+        results["gate"] = {"status": status(checks), "failed": [c.name for c in checks if c.status == "fail"],
+                           "checked": [c.name for c in checks if c.status != "skip"], "baseline": a.baseline}
+        _write(a.out, json.dumps(results, indent=1) + "\n")
+        return _emit(a, results, checks, baseline)
     return EXIT_OK
 
 
@@ -75,6 +81,22 @@ def cmd_check(a):
     results = _load_json(a.results, "results")
     baseline = _load_json(a.baseline, "baseline") if a.baseline else None
     return _emit(a, results, evaluate(results, cfg["thresholds"], baseline), baseline)
+
+
+def cmd_matrix(a):
+    m = matrix_mod.load_matrix(a.config)
+    summary = matrix_mod.run_matrix(m, a.out, dry_run=a.dry_run)
+    if a.dry_run:
+        return EXIT_OK
+    md = matrix_mod.markdown(summary)
+    _write(pathlib.Path(a.out) / "summary.md", md)
+    print(md)
+    if a.junit:
+        _write(a.junit, matrix_mod.junit(summary)); print(f"wrote {a.junit}")
+    if a.markdown:
+        _write(a.markdown, md); print(f"wrote {a.markdown}")
+    print(f"wrote {pathlib.Path(a.out) / 'summary.json'}")
+    return EXIT_FAIL if any(c["status"] == "fail" for c in summary["cells"]) else EXIT_OK
 
 
 def main(argv=None):
@@ -100,10 +122,18 @@ def main(argv=None):
     p.add_argument("--markdown")
     p.set_defaults(func=cmd_check)
 
+    p = sub.add_parser("matrix", help="run variants x repeats (interleaved, resumable) and tabulate crash rate per cell")
+    p.add_argument("-c", "--config", default="matrix.yaml", help="matrix file (see edgegate.matrix docstring)")
+    p.add_argument("-o", "--out", default="results/matrix", help="results directory; existing r<N>.json files are skipped")
+    p.add_argument("--junit", help="one JUnit testcase per cell")
+    p.add_argument("--markdown", help="copy of the summary table")
+    p.add_argument("--dry-run", action="store_true", help="print the command line of every pending run and exit")
+    p.set_defaults(func=cmd_matrix)
+
     a = ap.parse_args(argv)
     try:
         return a.func(a)
-    except (config.ConfigError, BackendError, DatasetError, RuntimeError) as e:
+    except (config.ConfigError, BackendError, DatasetError, RuntimeError, matrix_mod.MatrixError) as e:
         _err(f"error: {e}")
         return EXIT_ERROR
 

@@ -112,6 +112,40 @@ def _count_metrics(metrics, out_dir, wall_s):
     return found
 
 
+def forensics(samples, rss_series, end_t_s, window_s=30.0):
+    """What the board looked like in the last `window_s` seconds before the process died (or before the window
+    closed). `samples` are tegrastats samples with t_s; `rss_series` is [(t_s, rss_mb)] for the process tree.
+    death_t_s = last moment the process tree still held more than half its peak RSS; None if it never fell."""
+    death = None
+    if rss_series:
+        peak = max(v for _, v in rss_series)
+        alive = [t for t, v in rss_series if v > peak * 0.5]
+        if alive and alive[-1] < rss_series[-1][0] - 1.0:      # it fell more than a second before sampling stopped
+            death = alive[-1]
+    t_end = death if death is not None else end_t_s
+    win = [x for x in samples if x.get("t_s") is not None and t_end - window_s <= x["t_s"] <= t_end]
+    out = {"window_s": window_s, "death_t_s": round(death, 1) if death is not None else None, "samples": len(win)}
+    rams = [x["ram_mb"] for x in win if x.get("ram_mb") is not None]
+    if rams:
+        out["ram_mb"] = {"min": min(rams), "max": max(rams), "mean": round(sum(rams) / len(rams))}
+        # swings: how many times RAM moved by more than a quarter of its range inside the window.
+        # 0 or 1 = a plateau or a single step; many = allocation cycling.
+        span = max(rams) - min(rams)
+        swings, last = 0, rams[0]
+        for v in rams[1:]:
+            if span and abs(v - last) > span * 0.25:
+                swings += 1; last = v
+        out["ram_swings"] = swings
+        out["ram_pattern"] = "plateau" if swings <= 1 or span < 512 else "cycling"
+    rails = sorted({n for x in win for n in x["rails"]})
+    if rails:
+        out["rails_w"] = {r: round(sum(x["rails"].get(r, 0) for x in win) / len(win) / 1000.0, 2) for r in rails}
+    rss_win = [v for t, v in rss_series if t_end - window_s <= t <= t_end]
+    if rss_win:
+        out["process_rss_mb"] = {"min": round(min(rss_win)), "max": round(max(rss_win))}
+    return out
+
+
 def run_command(cfg, backend, out_dir, notes=None):
     """The command backend: run the process for benchmark.duration_s (or until it exits), sampling meanwhile."""
     bench = cfg["benchmark"]
@@ -154,6 +188,7 @@ def run_command(cfg, backend, out_dir, notes=None):
     timeline = None
     if write_timeline(out_dir / "timeline.csv", sampler.timeline(), {"process_rss_mb": rss.series}):
         timeline = str(out_dir / "timeline.csv")
+    last = forensics(sampler.timeline(), rss.series, wall_s)
     none = {"p50": None, "p90": None, "p99": None, "mean": None, "min": None, "max": None, "n": 0,
             "source": "n/a: command backend has no per-inference latency; see metrics[*].per_s"}
     return {
@@ -164,7 +199,7 @@ def run_command(cfg, backend, out_dir, notes=None):
                   "input_shape": None, **backend.describe()},
         "benchmark": {"warmup": 0, "iterations": 0, "duration_s": duration},
         "command": {"exit_code": exit_code, "timed_out": timed_out, "wall_s": wall_s, "stdout": str(stdout_path),
-                    "argv": cmd, "timeline": timeline, "started_at": started_at},
+                    "argv": cmd, "timeline": timeline, "started_at": started_at, "forensics": last},
         "metrics": metrics,
         "latency_ms": none,
         "throughput_ips": None,

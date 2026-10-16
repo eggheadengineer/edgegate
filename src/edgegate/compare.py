@@ -28,9 +28,29 @@ def _pct_change(cur, base):
     return (cur - base) / base * 100.0
 
 
+def baseline_problem(baseline, thresholds):
+    """Why this baseline must not anchor regression checks, or None. A run that failed its own gate, or a
+    command run that exited outside ok_exit_codes, is not a reference: comparing against it produces verdicts
+    like 'power regressed 66%' when the baseline simply died early."""
+    if not baseline or not (thresholds or {}).get("baseline_must_pass", True):
+        return None
+    gate = baseline.get("gate")
+    if gate and gate.get("status") == "fail":
+        return "baseline failed its own gate: " + ", ".join(gate.get("failed", [])[:4])
+    cmd = baseline.get("command")
+    ok = (thresholds or {}).get("ok_exit_codes")
+    if cmd is not None and ok is not None and cmd.get("exit_code") not in ok:
+        return f"baseline process exited {cmd.get('exit_code')}, not in accepted {ok}"
+    return None
+
+
 def evaluate(results, thresholds, baseline=None):
     checks = []
     t = thresholds or {}
+    bad_baseline = baseline_problem(baseline, t)
+    if bad_baseline:
+        checks.append(Check("baseline_valid", "fail", None, None, baseline.get("created_at"), message=bad_baseline + "; regression checks skipped"))
+        baseline = None
     lat = results["latency_ms"].get("p99")
     mem = results["memory"].get("peak_rss_mb")
     board_mem = results["memory"].get("board_ram_peak_mb")
