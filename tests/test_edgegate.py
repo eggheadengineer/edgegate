@@ -591,6 +591,24 @@ class Matrix(unittest.TestCase):
         m["require_gate_pass"] = False
         self.assertEqual({c["name"]: c["status"] for c in self.mx.tabulate(m, self.d / "out")["cells"]}["starved"], "pass")
 
+    def test_cell_path_swaps_the_executable(self):
+        other = self.d / "other-python"; other.symlink_to(sys.executable)
+        (self.d / "matrix.yaml").write_text(textwrap.dedent("""
+            version: 1
+            base: edgegate.yaml
+            cells:
+              - { name: a }
+              - { name: b, path: other-python }
+              - { name: c, path: missing-binary }
+        """))
+        with self.assertRaises(config.ConfigError):
+            self.mx.load_matrix(self.d / "matrix.yaml")
+        (self.d / "matrix.yaml").write_text((self.d / "matrix.yaml").read_text().replace("              - { name: c, path: missing-binary }\n", ""))
+        m = self.mx.load_matrix(self.d / "matrix.yaml")
+        base = config.load(m["base"])
+        self.assertEqual(self.mx.apply_cell(base, m["cells"][1], m)["model"]["path"], str(other.resolve()) if False else str(other))
+        self.assertEqual(self.mx.apply_cell(base, m["cells"][0], m)["model"]["path"], base["model"]["path"])
+
     def test_cells_are_interleaved_rep_major(self):
         m = self.mx.load_matrix(self.d / "matrix.yaml")
         self.mx.run_matrix(m, self.d / "out", log=lambda s: None)

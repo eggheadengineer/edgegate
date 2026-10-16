@@ -12,6 +12,7 @@ Matrix file (YAML):
       - { name: trt,  args: { add: ["-S"] }, duration_s: 240 }
       - { name: fp32, env: { PRECISION: fp32 } }
       - { name: pm25, power_mode: 3 }                      # nvpmodel id; must switch without a reboot
+      - { name: prev, path: ../builds/engine-v4.0.4 }      # a different executable or model for this cell
 Cells are interleaved (rep 1 of every cell, then rep 2, ...) so slow drift cannot favour one cell, and a run
 whose results file already exists is skipped, so an interrupted matrix resumes where it stopped.
 """
@@ -63,6 +64,12 @@ def load_matrix(path):
             raise ConfigError(f"matrix: cells[{i}].args must have 'set' (mapping) and/or 'add' (list)")
         if "power_mode" in c and not isinstance(c["power_mode"], int):
             raise ConfigError(f"matrix: cells[{i}].power_mode must be an nvpmodel id (integer)")
+        if "path" in c:
+            if not isinstance(c["path"], str) or not c["path"]:
+                raise ConfigError(f"matrix: cells[{i}].path must be a path string")
+            c["path"] = str((pathlib.Path(path).resolve().parent / c["path"]).resolve())
+            if not pathlib.Path(c["path"]).exists():
+                raise ConfigError(f"matrix: cells[{i}].path does not exist: {c['path']}")
     m["repeats"] = int(m.get("repeats", 1))
     if m["repeats"] < 1:
         raise ConfigError("matrix: repeats must be >= 1")
@@ -95,6 +102,8 @@ def apply_cell(base_cfg, cell, matrix):
     dur = cell.get("duration_s", matrix.get("duration_s"))
     if dur is not None:
         cfg["benchmark"]["duration_s"] = dur
+    if cell.get("path"):
+        model["path"] = cell["path"]          # a different build of the engine, or a different model file
     return cfg
 
 
