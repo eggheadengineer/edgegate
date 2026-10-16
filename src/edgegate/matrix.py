@@ -9,6 +9,7 @@ Matrix file (YAML):
     cells:
       - { name: baseline }
       - { name: b2,   args: { set: { "-b": "2" } } }       # replace the value after a flag (or append flag+value)
+      - { name: noS,  args: { remove: ["-S"] } }           # drop a bare flag (use set to change a valued one)
       - { name: trt,  args: { add: ["-S"] }, duration_s: 240 }
       - { name: fp32, env: { PRECISION: fp32 } }
       - { name: pm25, power_mode: 3 }                      # nvpmodel id; must switch without a reboot
@@ -60,14 +61,15 @@ def load_matrix(path):
             raise ConfigError(f"matrix: duplicate cell name {c['name']}")
         names.add(c["name"])
         a = c.get("args") or {}
-        if not isinstance(a, dict) or not isinstance(a.get("set", {}), dict) or not isinstance(a.get("add", []), list):
-            raise ConfigError(f"matrix: cells[{i}].args must have 'set' (mapping) and/or 'add' (list)")
+        if not isinstance(a, dict) or not isinstance(a.get("set", {}), dict) or not isinstance(a.get("add", []), list) \
+                or not isinstance(a.get("remove", []), list):
+            raise ConfigError(f"matrix: cells[{i}].args must have 'set' (mapping), 'add' (list) and/or 'remove' (list)")
         if "power_mode" in c and not isinstance(c["power_mode"], int):
             raise ConfigError(f"matrix: cells[{i}].power_mode must be an nvpmodel id (integer)")
         if "path" in c:
             if not isinstance(c["path"], str) or not c["path"]:
                 raise ConfigError(f"matrix: cells[{i}].path must be a path string")
-            c["path"] = str((pathlib.Path(path).resolve().parent / c["path"]).resolve())
+            c["path"] = os.path.normpath(os.path.join(pathlib.Path(path).resolve().parent, c["path"]))
             if not pathlib.Path(c["path"]).exists():
                 raise ConfigError(f"matrix: cells[{i}].path does not exist: {c['path']}")
     m["repeats"] = int(m.get("repeats", 1))
@@ -89,6 +91,8 @@ def apply_cell(base_cfg, cell, matrix):
     if a and model["backend"] != "command":
         raise ConfigError(f"matrix: cell {cell['name']} edits args but the base backend is {model['backend']}")
     args = list(model.get("args") or [])
+    for flag in (a.get("remove") or []):          # drop a bare flag such as -S; change valued flags with set
+        args = [x for x in args if x != flag]
     for flag, val in (a.get("set") or {}).items():
         val = str(val)
         if flag in args and args.index(flag) + 1 < len(args):

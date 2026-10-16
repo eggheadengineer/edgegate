@@ -1,4 +1,5 @@
 """Hermetic tests: a tiny ONNX model built on the fly, an npz dataset, no hardware."""
+import copy
 import json
 import os
 import pathlib
@@ -536,6 +537,10 @@ class Matrix(unittest.TestCase):
         self.assertEqual(cfg["model"]["args"][-2:], ["--batch", "2"])
         cfg = self.mx.apply_cell(base, m["cells"][2], m)
         self.assertEqual(cfg["model"]["env"]["WORKLOAD_CRASH_AFTER"], "0.5")
+        cfg = self.mx.apply_cell(base, {"name": "x", "args": {"add": ["-S"]}}, m)
+        self.assertIn("-S", cfg["model"]["args"])
+        base2 = copy.deepcopy(base); base2["model"]["args"] += ["-S"]
+        self.assertNotIn("-S", self.mx.apply_cell(base2, {"name": "y", "args": {"remove": ["-S"]}}, m)["model"]["args"])
         self.assertEqual(base["model"].get("env"), None)             # base untouched
         lines = []
         self.mx.run_matrix(m, self.d / "out", log=lines.append, dry_run=True)
@@ -603,10 +608,10 @@ class Matrix(unittest.TestCase):
         """))
         with self.assertRaises(config.ConfigError):
             self.mx.load_matrix(self.d / "matrix.yaml")
-        (self.d / "matrix.yaml").write_text((self.d / "matrix.yaml").read_text().replace("              - { name: c, path: missing-binary }\n", ""))
+        import re as _re; (self.d / "matrix.yaml").write_text(_re.sub(r".*missing-binary.*\n", "", (self.d / "matrix.yaml").read_text()))
         m = self.mx.load_matrix(self.d / "matrix.yaml")
         base = config.load(m["base"])
-        self.assertEqual(self.mx.apply_cell(base, m["cells"][1], m)["model"]["path"], str(other.resolve()) if False else str(other))
+        self.assertEqual(self.mx.apply_cell(base, m["cells"][1], m)["model"]["path"], str(other))
         self.assertEqual(self.mx.apply_cell(base, m["cells"][0], m)["model"]["path"], base["model"]["path"])
 
     def test_cells_are_interleaved_rep_major(self):
