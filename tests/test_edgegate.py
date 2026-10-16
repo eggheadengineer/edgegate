@@ -570,6 +570,27 @@ class Matrix(unittest.TestCase):
         with self.assertRaises(config.ConfigError):
             self.mx.load_matrix(self.d / "bad2.yaml")
 
+    def test_alive_but_under_spec_fails_the_cell(self):
+        """A cell can run every window to the end and still be wrong: zero output, over power. That fails."""
+        (self.d / "matrix.yaml").write_text(textwrap.dedent("""
+            version: 1
+            base: edgegate.yaml
+            repeats: 2
+            cells:
+              - { name: baseline }
+              - { name: starved, args: { set: { "--rate": "1" } }, note: "alive, under the detections minimum" }
+        """))
+        m = self.mx.load_matrix(self.d / "matrix.yaml")
+        summary = self.mx.run_matrix(m, self.d / "out", log=lambda s: None)
+        by = {c["name"]: c for c in summary["cells"]}
+        self.assertEqual((by["starved"]["crashed"], by["starved"]["under_spec"], by["starved"]["status"]), (0, 2, "fail"))
+        self.assertEqual(by["starved"]["under_spec_checks"], ["metric_min:detections"])
+        self.assertEqual(by["baseline"]["status"], "pass")
+        self.assertIn("| starved (alive, under the detections minimum) | 0 / 2 | 2 / 2 (metric_min:detections) |", self.mx.markdown(summary))
+        self.assertIn("ran the full window but failed metric_min:detections", self.mx.junit(summary))
+        m["require_gate_pass"] = False
+        self.assertEqual({c["name"]: c["status"] for c in self.mx.tabulate(m, self.d / "out")["cells"]}["starved"], "pass")
+
     def test_cells_are_interleaved_rep_major(self):
         m = self.mx.load_matrix(self.d / "matrix.yaml")
         self.mx.run_matrix(m, self.d / "out", log=lambda s: None)

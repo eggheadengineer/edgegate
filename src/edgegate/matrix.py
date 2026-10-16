@@ -70,6 +70,7 @@ def load_matrix(path):
     m["base"] = str((m["_root"] / m["base"]).resolve())
     m.setdefault("stale_processes", [])
     m.setdefault("max_crash_rate", 0.0)        # a cell fails its JUnit case when crashed/n exceeds this
+    m.setdefault("require_gate_pass", True)    # ...or when any run failed its own gate (e.g. ran clean but under spec)
     return m
 
 
@@ -281,6 +282,9 @@ def tabulate(matrix, out_dir):
         measured = [x for x in rows if "skipped" not in x]
         crashed = [x for x in measured if x["crashed"]]
         clean = [x for x in measured if not x["crashed"]]
+        gate_failed = [x for x in measured if x.get("gate") == "fail"]
+        # "alive but wrong": ran the full window yet failed a non-exit check (zero output, over power, ...)
+        under_spec = [x for x in clean if x.get("gate") == "fail"]
         def mean(key, src):
             vals = [x[key] for x in src if x.get(key) is not None]
             return round(sum(vals) / len(vals), 2) if vals else None
@@ -289,32 +293,42 @@ def tabulate(matrix, out_dir):
             vals = [x["rates"][k] for x in clean if x.get("rates", {}).get(k) is not None]
             rates[k] = round(sum(vals) / len(vals), 3) if vals else None
         rate = len(crashed) / len(measured) if measured else None
+        failed_checks = sorted({c for x in under_spec for c in x.get("failed", []) if c != "exit_code"})
+        if not measured:
+            verdict = "skip"
+        elif rate > matrix.get("max_crash_rate", 0.0) or (matrix.get("require_gate_pass", True) and gate_failed):
+            verdict = "fail"
+        else:
+            verdict = "pass"
         cells.append({"name": cell["name"], "note": cell.get("note"), "n": len(measured), "skipped": len(rows) - len(measured),
                       "crashed": len(crashed), "crash_rate": round(rate, 3) if rate is not None else None,
+                      "gate_failed": len(gate_failed), "under_spec": len(under_spec), "under_spec_checks": failed_checks,
                       "time_to_crash_s": [x["wall_s"] for x in crashed if "wall_s" in x],
                       "clean_power_w": mean("power_w", clean), "clean_rates": rates,
                       "clean_latency_p99_ms": mean("latency_p99_ms", clean),
                       "board_ram_peak_mb": max((x["board_ram_peak_mb"] or 0 for x in measured), default=None),
                       "forensic_patterns": sorted({(x.get("forensics") or {}).get("ram_pattern") for x in crashed if x.get("forensics")} - {None}),
-                      "status": "skip" if not measured else ("fail" if rate > matrix.get("max_crash_rate", 0.0) else "pass"),
+                      "status": verdict,
                       "runs": rows})
     summary = {"edgegate_matrix": 1, "created_at": _now(), "base": matrix["base"], "repeats": matrix["repeats"],
-               "max_crash_rate": matrix.get("max_crash_rate", 0.0), "cells": cells}
+               "max_crash_rate": matrix.get("max_crash_rate", 0.0), "require_gate_pass": matrix.get("require_gate_pass", True), "cells": cells}
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
     return summary
 
 
 def markdown(summary):
     L = [f"# edgegate matrix: {pathlib.Path(summary['base']).name}, {summary['repeats']} repeats per cell", "",
-         "| cell | crashed | time to crash | clean rate | clean power W | board RAM peak MB | RAM before crash | verdict |",
-         "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+         "| cell | crashed | alive but under spec | time to crash | clean rate | clean power W | board RAM peak MB | RAM before crash | verdict |",
+         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for c in summary["cells"]:
         tc = c["time_to_crash_s"]
         tcs = "—" if not tc else (f"{min(tc):.0f} s" if round(min(tc)) == round(max(tc)) else f"{min(tc):.0f}–{max(tc):.0f} s")
         rate = ", ".join(f"{k} {v}/s" for k, v in (c["clean_rates"] or {}).items()) or (f"p99 {c['clean_latency_p99_ms']} ms" if c.get("clean_latency_p99_ms") else "—")
-        L.append(f"| {c['name']}{' (' + c['note'] + ')' if c.get('note') else ''} | {c['crashed']} / {c['n']} | {tcs} | {rate} | {c['clean_power_w'] or '—'} | {c['board_ram_peak_mb'] or '—'} | {', '.join(c['forensic_patterns']) or '—'} | {c['status'].upper()} |")
-    L += ["", f"A cell FAILS when its crash rate exceeds {summary['max_crash_rate']:.0%}. 'RAM before crash' is the pattern in the last 30 s of each crashed run: "
-          "plateau (steady, like a healthy run) or cycling (repeated large swings, typically an allocation that keeps failing)."]
+        us = f"{c['under_spec']} / {c['n']}" + (f" ({', '.join(c['under_spec_checks'])})" if c['under_spec_checks'] else "")
+        L.append(f"| {c['name']}{' (' + c['note'] + ')' if c.get('note') else ''} | {c['crashed']} / {c['n']} | {us} | {tcs} | {rate} | {c['clean_power_w'] or '—'} | {c['board_ram_peak_mb'] or '—'} | {', '.join(c['forensic_patterns']) or '—'} | {c['status'].upper()} |")
+    L += ["", f"A cell FAILS when its crash rate exceeds {summary['max_crash_rate']:.0%}"
+          + (" or when any run failed its own gate ('alive but under spec': it ran the full window but missed a check such as a metric minimum)." if summary.get("require_gate_pass", True) else ".")
+          + " 'RAM before crash' is the pattern in the last 30 s of each crashed run: plateau, step (one excursion) or cycling (repeated large swings, typically an allocation that keeps failing)."]
     return "\n".join(L) + "\n"
 
 
@@ -327,12 +341,14 @@ def junit(summary):
     for c in cells:
         tc = ET.SubElement(ts, "testcase", classname="edgegate.matrix", name=c["name"])
         msg = f"{c['crashed']} of {c['n']} runs crashed (limit {summary['max_crash_rate']:.0%})"
+        if c.get("under_spec"):
+            msg += f"; {c['under_spec']} ran the full window but failed {', '.join(c['under_spec_checks']) or 'a check'}"
         if c["status"] == "fail":
             ET.SubElement(tc, "failure", message=msg, type="crash_rate").text = msg
         elif c["status"] == "skip":
             ET.SubElement(tc, "skipped", message="no measured runs")
         props = ET.SubElement(tc, "properties")
-        for k in ("crashed", "n", "crash_rate", "clean_power_w", "board_ram_peak_mb"):
+        for k in ("crashed", "n", "crash_rate", "under_spec", "clean_power_w", "board_ram_peak_mb"):
             if c.get(k) is not None:
                 ET.SubElement(props, "property", name=k, value=str(c[k]))
     return ET.tostring(ts, encoding="unicode", xml_declaration=True)
