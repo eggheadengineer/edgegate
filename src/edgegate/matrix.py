@@ -310,7 +310,7 @@ def markdown(summary):
          "| --- | --- | --- | --- | --- | --- | --- | --- |"]
     for c in summary["cells"]:
         tc = c["time_to_crash_s"]
-        tcs = f"{min(tc):.0f}–{max(tc):.0f} s" if len(tc) > 1 else (f"{tc[0]:.0f} s" if tc else "—")
+        tcs = "—" if not tc else (f"{min(tc):.0f} s" if round(min(tc)) == round(max(tc)) else f"{min(tc):.0f}–{max(tc):.0f} s")
         rate = ", ".join(f"{k} {v}/s" for k, v in (c["clean_rates"] or {}).items()) or (f"p99 {c['clean_latency_p99_ms']} ms" if c.get("clean_latency_p99_ms") else "—")
         L.append(f"| {c['name']}{' (' + c['note'] + ')' if c.get('note') else ''} | {c['crashed']} / {c['n']} | {tcs} | {rate} | {c['clean_power_w'] or '—'} | {c['board_ram_peak_mb'] or '—'} | {', '.join(c['forensic_patterns']) or '—'} | {c['status'].upper()} |")
     L += ["", f"A cell FAILS when its crash rate exceeds {summary['max_crash_rate']:.0%}. 'RAM before crash' is the pattern in the last 30 s of each crashed run: "
