@@ -451,6 +451,17 @@ class ForensicShapes(unittest.TestCase):
         self.assertEqual(fx["ram_pattern"], "plateau")
         self.assertEqual(fx["rails_w"]["VDD_CPU_GPU_CV"], 8.0)
 
+    def test_warmup_spike_then_lower_plateau_is_not_a_death(self):
+        """RSS peaks at 12 GB while models load, then runs at 4.6 GB for the rest of a clean 300 s window."""
+        rss = [(float(t), 12000.0 if 15 <= t < 30 else (300.0 if t < 15 else 4600.0)) for t in range(300)]
+        fx = measure.forensics(self.ram("healthy", n=300), rss, 300.0)
+        self.assertIsNone(fx["death_t_s"])
+        self.assertEqual(fx["ram_pattern"], "plateau")
+        # and a real death after that plateau is still found at the right time
+        rss2 = [(t, v if t < 250 else 3.0) for t, v in rss]
+        fx2 = measure.forensics(self.ram("healthy", n=300), rss2, 300.0)
+        self.assertEqual(fx2["death_t_s"], 249.0)
+
     def test_crash_right_after_the_warmup_spike_is_a_step(self):
         samples = [x for x in self.ram("healthy") if x["t_s"] <= 36]
         rss = [(float(t), 12000.0 if t < 35 else 3.0) for t in range(37)]

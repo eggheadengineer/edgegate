@@ -115,11 +115,15 @@ def _count_metrics(metrics, out_dir, wall_s):
 def forensics(samples, rss_series, end_t_s, window_s=30.0):
     """What the board looked like in the last `window_s` seconds before the process died (or before the window
     closed). `samples` are tegrastats samples with t_s; `rss_series` is [(t_s, rss_mb)] for the process tree.
-    death_t_s = last moment the process tree still held more than half its peak RSS; None if it never fell."""
+    death_t_s = last moment the process tree still held real memory (above 5% of its peak); None if it never fell."""
     death = None
     if rss_series:
         peak = max(v for _, v in rss_series)
-        alive = [t for t, v in rss_series if v > peak * 0.5]
+        # Alive means the tree still holds real memory. A warm-up spike that settles to a lower plateau is not
+        # a death (an engine that peaks at 12 GB loading models and then runs at 4.6 GB is healthy), so the
+        # floor is small and absolute: below 5% of peak or 64 MB, whichever is larger.
+        floor = max(peak * 0.05, 64.0)
+        alive = [t for t, v in rss_series if v > floor]
         if alive and alive[-1] < rss_series[-1][0] - 1.0:      # it fell more than a second before sampling stopped
             death = alive[-1]
     t_end = death if death is not None else end_t_s
