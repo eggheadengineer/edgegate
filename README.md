@@ -8,7 +8,7 @@ Built for Jetson (TensorRT through `trtexec`, power through `tegrastats`), but t
 same gate anywhere with ONNX Runtime, so the pipeline can be developed and tested without the board.
 
 ```
-pip install "edgegate[host] @ git+https://github.com/eggheadengineer/edgegate"
+pip install "edgegate[host]"
 python examples/host/make_sample.py
 edgegate run -c examples/host/edgegate.yaml --check --junit results/junit.xml --markdown results/report.md
 ```
